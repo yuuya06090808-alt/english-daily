@@ -148,7 +148,12 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:var(
       <div class="card" style="text-align:center"><div class="card-title" id="swUnitLabel">-</div><div class="timer-display" id="timerDisplay">00:00</div><div class="timer-auto-stop">90分で自動停止します</div><div class="timer-controls"><button class="timer-btn reset" onclick="resetTimer()">↺</button><button class="timer-btn start" id="timerToggle" onclick="toggleTimer()">▶</button><button class="timer-btn stop" onclick="saveTimer()">✓</button></div></div>
     </div>
     <div id="recManual" style="display:none">
-      <div class="card"><div class="form-group"><label>日付</label><input type="date" id="manDate"></div><div class="form-group"><label>単元</label><select id="manUnit"></select></div><div class="form-group"><label>学習時間（分）</label><input type="number" id="manMins" value="30" min="1" max="180"></div><button class="submit-btn" onclick="saveManual()">記録する</button></div>
+      <div class="card">
+        <div class="date-nav"><button onclick="bulkNav(-1)">‹</button><input type="date" id="bulkDate" onchange="onBulkDateChange()" style="padding:8px;border-radius:8px;border:1px solid var(--surface2);background:var(--bg);color:var(--text);font-size:14px"><button id="bulkNext" onclick="bulkNav(1)">›</button></div>
+        <div id="bulkRows"></div>
+        <button class="submit-btn" style="background:var(--surface2);margin-top:12px" onclick="bulkQuickFill()">計画通りに入力</button>
+        <button class="submit-btn" style="margin-top:8px" onclick="saveBulk()">この日の記録を保存</button>
+      </div>
     </div>
     <div class="card"><div class="card-title">今日の記録</div><div id="todayLogs"></div></div>
   </div>
@@ -156,6 +161,8 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:var(
   <div class="page" id="page-plan">
     <div class="card"><div class="card-title">1日の学習計画（合計 <span id="planTotal">150</span>分）</div><div id="planList"></div></div>
     <div class="card"><div class="card-title">目標設定</div><div class="form-group"><label>日次目標（分）</label><input type="number" id="dailyGoalInput" value="150" min="30" step="30"></div><div class="form-group"><label>週次最低ライン（分）</label><input type="number" id="weeklyMinInput" value="840" min="60" step="60"></div><button class="submit-btn" onclick="saveGoals()">保存</button></div>
+    <div class="card"><div class="card-title">Versantスコア</div><div id="scoreList"></div><div class="form-group"><label>受験日</label><input type="date" id="scoreDate"></div><div class="form-group"><label>スコア</label><input type="number" id="scoreVal" min="20" max="80" placeholder="例: 32"></div><button class="submit-btn" onclick="addScore()">スコアを記録</button></div>
+    <div class="card"><div class="card-title">データ管理</div><button class="submit-btn" onclick="exportData()">📋 データを書き出す（コピー）</button><div class="form-group" style="margin-top:12px"><label>復元用データ（JSON）を貼り付け</label><textarea id="importText" rows="3" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--surface2);background:var(--bg);color:var(--text);font-size:12px;font-family:inherit"></textarea></div><button class="submit-btn" style="background:var(--surface2)" onclick="importData()">データを読み込む</button></div>
   </div>
   <!-- WEEKLY REPORT -->
   <div class="page" id="page-report">
@@ -181,14 +188,15 @@ const MOTIVATION=[{emoji:'💪',msg:'今日も一歩前へ！小さな積み重�
 
 const load=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch{return d}};
 const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
-const today=()=>new Date().toISOString().slice(0,10);
+const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const today=()=>iso(new Date());
 const dayLabel=d=>['日','月','火','水','木','金','土'][new Date(d+'T00:00:00').getDay()];
 const fmtDate=d=>{const dt=new Date(d+'T00:00:00');return `${dt.getMonth()+1}/${dt.getDate()}(${dayLabel(d)})`};
 
 let logs=load('logs',{});
 let plan=load('plan',DEFAULT_PLAN);
 let goals=load('goals',{daily:150,weeklyMin:840});
-let streak=load('streak',{count:0,lastDate:''});
+let scores=load('scores',[]);
 let histDate=new Date();
 let nextLogId=load('nextLogId',1);
 
@@ -205,13 +213,18 @@ function updateTimerDisplay(){const m=Math.floor(timerSecs/60),s=timerSecs%60;do
 function saveTimer(){if(timerSecs<60){showToast('1分以上学習してから保存してください');return;}addLog(today(),selectedUnit,Math.round(timerSecs/60));resetTimer();showToast('記録しました！');}
 
 function switchRecTab(tab){document.querySelectorAll('.rec-tab').forEach(t=>t.classList.remove('active'));if(tab==='stopwatch'){document.querySelectorAll('.rec-tab')[0].classList.add('active');document.getElementById('recStopwatch').style.display='';document.getElementById('recManual').style.display='none';}else{document.querySelectorAll('.rec-tab')[1].classList.add('active');document.getElementById('recStopwatch').style.display='none';document.getElementById('recManual').style.display='';}}
-function saveManual(){const d=document.getElementById('manDate').value;const unit=document.getElementById('manUnit').value;const mins=parseInt(document.getElementById('manMins').value);if(!d||!unit||!mins||mins<1){showToast('すべて入力してください');return;}addLog(d,unit,mins);const u=UNITS.find(x=>x.id===unit);showToast(`${u?u.name:unit} ${mins}分を記録しました！`);}
+let bulkDate=today();
+function renderBulk(){document.getElementById('bulkDate').value=bulkDate;document.getElementById('bulkDate').max=today();document.getElementById('bulkNext').disabled=(bulkDate>=today());document.getElementById('bulkRows').innerHTML=UNITS.map(u=>{const cur=getDayUnitMins(bulkDate,u.id);return `<div class="plan-item"><div class="plan-icon" style="background:${u.color}20">${u.icon}</div><div class="plan-content"><div class="plan-name">${u.name}</div></div><input type="number" id="bulk-${u.id}" value="${cur}" min="0" max="300" step="5" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--surface2);background:var(--bg);color:var(--text);font-size:14px;text-align:center"></div>`;}).join('');}
+function bulkNav(dir){const d=new Date(bulkDate+'T00:00:00');d.setDate(d.getDate()+dir);const nd=iso(d);if(nd>today())return;bulkDate=nd;renderBulk();}
+function onBulkDateChange(){const v=document.getElementById('bulkDate').value;if(!v)return;bulkDate=v>today()?today():v;renderBulk();}
+function bulkQuickFill(){UNITS.forEach(u=>{const p=plan.find(x=>x.id===u.id);document.getElementById('bulk-'+u.id).value=p?p.mins:30;});}
+function saveBulk(){let changed=0;UNITS.forEach(u=>{const val=Math.max(0,parseInt(document.getElementById('bulk-'+u.id).value)||0);const cur=getDayUnitMins(bulkDate,u.id);if(val===cur)return;if(!logs[bulkDate])logs[bulkDate]=[];logs[bulkDate]=logs[bulkDate].filter(l=>l.unit!==u.id);if(val>0)logs[bulkDate].push({id:nextLogId++,unit:u.id,mins:val,time:''});if(logs[bulkDate].length===0)delete logs[bulkDate];changed++;});if(changed===0){showToast('変更はありません','warn');return;}save('logs',logs);save('nextLogId',nextLogId);renderBulk();renderDayLogs(today(),'todayLogs');renderHome();showToast(`${fmtDate(bulkDate)}の記録を保存しました`);}
 
-function addLog(date,unit,mins){if(!logs[date])logs[date]=[];logs[date].push({id:nextLogId++,unit,mins,time:new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})});save('logs',logs);save('nextLogId',nextLogId);updateStreak();renderRecord();renderHome();}
+function addLog(date,unit,mins){if(!logs[date])logs[date]=[];logs[date].push({id:nextLogId++,unit,mins,time:new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})});save('logs',logs);save('nextLogId',nextLogId);renderRecord();renderHome();}
 function getDayMins(date){return(logs[date]||[]).reduce((s,l)=>s+l.mins,0);}
 function getDayUnitMins(date,unitId){return(logs[date]||[]).filter(l=>l.unit===unitId).reduce((s,l)=>s+l.mins,0);}
-function getWeekMins(){const now=new Date();let total=0;for(let i=0;i<7;i++){const d=new Date(now);d.setDate(d.getDate()-i);total+=getDayMins(d.toISOString().slice(0,10));}return total;}
-function getWeekDates(){const dates=[];const now=new Date();for(let i=6;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);dates.push(d.toISOString().slice(0,10));}return dates;}
+function getWeekMins(){const now=new Date();let total=0;for(let i=0;i<7;i++){const d=new Date(now);d.setDate(d.getDate()-i);total+=getDayMins(iso(d));}return total;}
+function getWeekDates(){const dates=[];const now=new Date();for(let i=6;i>=0;i--){const d=new Date(now);d.setDate(d.getDate()-i);dates.push(iso(d));}return dates;}
 
 // Edit
 let editDate='',editLogId=0;
@@ -220,22 +233,32 @@ function saveEdit(){const log=(logs[editDate]||[]).find(l=>l.id===editLogId);if(
 function deleteLog(){logs[editDate]=(logs[editDate]||[]).filter(l=>l.id!==editLogId);if(logs[editDate].length===0)delete logs[editDate];save('logs',logs);closeModal('editModal');renderRecord();renderHome();renderHistory();showToast('削除しました');}
 function closeModal(id){document.getElementById(id).classList.remove('show');}
 
-function updateStreak(){const d=today();if(streak.lastDate===d)return;const yd=new Date();yd.setDate(yd.getDate()-1);streak.count=(streak.lastDate===yd.toISOString().slice(0,10))?streak.count+1:1;streak.lastDate=d;save('streak',streak);}
+function calcStreak(){let count=0;const d=new Date();if(getDayMins(iso(d))===0)d.setDate(d.getDate()-1);while(true){const ds=iso(d);if(ds<START_DATE)break;if(getDayMins(ds)===0)break;count++;d.setDate(d.getDate()-1);}return count;}
 
-function getAlerts(){const alerts=[];UNITS.forEach(u=>{let missed=0;for(let i=1;i<=3;i++){const dd=new Date();dd.setDate(dd.getDate()-i);const ds=dd.toISOString().slice(0,10);if(ds<START_DATE)break;if(getDayUnitMins(ds,u.id)===0)missed++;else break;}if(missed>=2){alerts.push({type:missed>=3?'danger':'warn',title:`${u.icon} ${u.name}が${missed}日間できていません`,msg:missed>=3?'少しでもいいので今日は取り組みましょう！5分でもOKです':'今日こそ取り組みましょう！継続が力になります'});}});const weekMins=getWeekMins();const dow=(new Date().getDay()||7);const expectedByNow=Math.round(goals.weeklyMin/7*dow);if(weekMins<expectedByNow*0.7){alerts.push({type:'warn',title:'📊 週次ペースが遅れています',msg:`現在${weekMins}分 / 目標ペース${expectedByNow}分。少しペースを上げましょう！`});}return alerts;}
-function getMotivation(){const dm=getDayMins(today()),wm=getWeekMins();if(streak.count>0&&streak.count%7===0)return{emoji:'🏆',msg:`${streak.count}日連続達成！素晴らしい継続力です！`};if(streak.count>=3)return{emoji:'🔥',msg:`${streak.count}日連続学習中！この調子！`};if(dm>=goals.daily)return{emoji:'🎉',msg:'今日の目標達成！素晴らしい！'};if(dm>=goals.daily*0.8)return{emoji:'💪',msg:'あと少しで今日の目標達成！'};if(wm>=goals.weeklyMin)return{emoji:'⭐',msg:'週次目標クリア！最高の週です！'};return MOTIVATION[Math.floor(Math.random()*MOTIVATION.length)];}
+function getAlerts(){const alerts=[];UNITS.forEach(u=>{let missed=0;for(let i=1;i<=3;i++){const dd=new Date();dd.setDate(dd.getDate()-i);const ds=iso(dd);if(ds<START_DATE)break;if(getDayUnitMins(ds,u.id)===0)missed++;else break;}if(missed>=2){alerts.push({type:missed>=3?'danger':'warn',title:`${u.icon} ${u.name}が${missed}日間できていません`,msg:missed>=3?'少しでもいいので今日は取り組みましょう！5分でもOKです':'今日こそ取り組みましょう！継続が力になります'});}});const weekMins=getWeekMins();const dow=(new Date().getDay()||7);const expectedByNow=Math.round(goals.weeklyMin/7*dow);if(weekMins<expectedByNow*0.7){alerts.push({type:'warn',title:'📊 週次ペースが遅れています',msg:`現在${weekMins}分 / 目標ペース${expectedByNow}分。少しペースを上げましょう！`});}return alerts;}
+function getMotivation(){const dm=getDayMins(today()),wm=getWeekMins(),sc=calcStreak();if(sc>0&&sc%7===0)return{emoji:'🏆',msg:`${sc}日連続達成！素晴らしい継続力です！`};if(sc>=3)return{emoji:'🔥',msg:`${sc}日連続学習中！この調子！`};if(dm>=goals.daily)return{emoji:'🎉',msg:'今日の目標達成！素晴らしい！'};if(dm>=goals.daily*0.8)return{emoji:'💪',msg:'あと少しで今日の目標達成！'};if(wm>=goals.weeklyMin)return{emoji:'⭐',msg:'週次目標クリア！最高の週です！'};return MOTIVATION[Math.floor(Math.random()*MOTIVATION.length)];}
 
 // Render Home
-function renderHome(){document.getElementById('streakCount').textContent=streak.count;const mot=getMotivation();document.getElementById('motEmoji').textContent=mot.emoji;document.getElementById('motMsg').textContent=mot.msg;document.getElementById('alertArea').innerHTML=getAlerts().map(a=>`<div class="alert-card ${a.type==='danger'?'danger':''}"><div class="alert-title">${a.title}</div><div class="alert-msg">${a.msg}</div></div>`).join('');const todayMins=getDayMins(today());document.getElementById('todayMin').innerHTML=todayMins+'<span style="font-size:16px">分</span>';const pct=Math.min(100,Math.round(todayMins/goals.daily*100));document.getElementById('goalPct').textContent=pct+'%';document.getElementById('goalArc').setAttribute('stroke-dashoffset',327-327*pct/100);document.getElementById('weekMin').innerHTML=getWeekMins()+'<span style="font-size:16px">分</span>';document.getElementById('weekGoalLabel').textContent=`目標: ${goals.weeklyMin}分/週`;document.getElementById('unitBars').innerHTML=UNITS.map(u=>{const planned=plan.find(p=>p.id===u.id)?.mins||30;const actual=getDayUnitMins(today(),u.id);const p=Math.min(100,Math.round(actual/planned*100));return `<div class="unit-bar-wrap"><div class="unit-bar-header"><span class="unit-bar-name">${u.icon} ${u.name}</span><span class="unit-bar-time">${actual}/${planned}分</span></div><div class="unit-bar"><div class="unit-bar-fill" style="width:${p}%;background:${u.color}"></div></div></div>`;}).join('');const now=new Date();const wData=[];for(let i=6;i>=0;i--){const dd=new Date(now);dd.setDate(dd.getDate()-i);const ds=dd.toISOString().slice(0,10);wData.push({day:dayLabel(ds),mins:getDayMins(ds),date:ds});}const maxM=Math.max(goals.daily,...wData.map(d=>d.mins));document.getElementById('weekChart').innerHTML=wData.map(d=>{const h=d.mins>0?Math.max(8,d.mins/maxM*90):0;const isToday=d.date===today();return `<div class="week-bar-col"><div class="week-bar-val">${d.mins>0?d.mins:''}</div><div class="week-bar" style="height:${h}px;${isToday?'':'opacity:0.6'}"></div><div class="week-bar-label" style="${isToday?'color:var(--accent);font-weight:700':''}">${d.day}</div></div>`;}).join('');}
+function renderHome(){document.getElementById('streakCount').textContent=calcStreak();const mot=getMotivation();document.getElementById('motEmoji').textContent=mot.emoji;document.getElementById('motMsg').textContent=mot.msg;document.getElementById('alertArea').innerHTML=getAlerts().map(a=>`<div class="alert-card ${a.type==='danger'?'danger':''}"><div class="alert-title">${a.title}</div><div class="alert-msg">${a.msg}</div></div>`).join('');const todayMins=getDayMins(today());document.getElementById('todayMin').innerHTML=todayMins+'<span style="font-size:16px">分</span>';const pct=Math.min(100,Math.round(todayMins/goals.daily*100));document.getElementById('goalPct').textContent=pct+'%';document.getElementById('goalArc').setAttribute('stroke-dashoffset',327-327*pct/100);document.getElementById('weekMin').innerHTML=getWeekMins()+'<span style="font-size:16px">分</span>';document.getElementById('weekGoalLabel').textContent=`目標: ${goals.weeklyMin}分/週`;document.getElementById('unitBars').innerHTML=UNITS.map(u=>{const planned=plan.find(p=>p.id===u.id)?.mins||30;const actual=getDayUnitMins(today(),u.id);const p=Math.min(100,Math.round(actual/planned*100));return `<div class="unit-bar-wrap"><div class="unit-bar-header"><span class="unit-bar-name">${u.icon} ${u.name}</span><span class="unit-bar-time">${actual}/${planned}分</span></div><div class="unit-bar"><div class="unit-bar-fill" style="width:${p}%;background:${u.color}"></div></div></div>`;}).join('');const now=new Date();const wData=[];for(let i=6;i>=0;i--){const dd=new Date(now);dd.setDate(dd.getDate()-i);const ds=iso(dd);wData.push({day:dayLabel(ds),mins:getDayMins(ds),date:ds});}const maxM=Math.max(goals.daily,...wData.map(d=>d.mins));document.getElementById('weekChart').innerHTML=wData.map(d=>{const h=d.mins>0?Math.max(8,d.mins/maxM*90):0;const isToday=d.date===today();return `<div class="week-bar-col"><div class="week-bar-val">${d.mins>0?d.mins:''}</div><div class="week-bar" style="height:${h}px;${isToday?'':'opacity:0.6'}"></div><div class="week-bar-label" style="${isToday?'color:var(--accent);font-weight:700':''}">${d.day}</div></div>`;}).join('');}
 
 // Render Record
-function renderRecord(){renderUnitSelect();document.getElementById('manDate').value=today();const manU=document.getElementById('manUnit');if(manU.options.length===0)manU.innerHTML=UNITS.map(u=>`<option value="${u.id}">${u.name}</option>`).join('');const editU=document.getElementById('editUnit');if(editU.options.length===0)editU.innerHTML=UNITS.map(u=>`<option value="${u.id}">${u.name}</option>`).join('');renderDayLogs(today(),'todayLogs');}
+function renderRecord(){renderUnitSelect();renderBulk();const editU=document.getElementById('editUnit');if(editU.options.length===0)editU.innerHTML=UNITS.map(u=>`<option value="${u.id}">${u.name}</option>`).join('');renderDayLogs(today(),'todayLogs');}
 function renderDayLogs(date,elId){const dl=logs[date]||[];const el=document.getElementById(elId);if(dl.length===0){el.innerHTML='<p style="font-size:13px;color:var(--text2)">記録なし</p>';return;}el.innerHTML=dl.map(l=>{const u=UNITS.find(x=>x.id===l.unit);return `<div class="log-item"><span class="log-cat" style="background:${u?u.color:'#666'}20;color:${u?u.color:'#666'}">${u?u.icon+' '+u.name:l.unit}</span><div class="log-info"><div class="log-time">${l.time||''}</div></div><div class="log-mins">${l.mins}分</div><button class="log-edit" onclick="openEdit('${date}',${l.id})">編集</button></div>`;}).join('');}
 
 // Render Plan
-function renderPlan(){document.getElementById('planList').innerHTML=UNITS.map(u=>{const p=plan.find(x=>x.id===u.id);const mins=p?p.mins:30;return `<div class="plan-item"><div class="plan-icon" style="background:${u.color}20">${u.icon}</div><div class="plan-content"><div class="plan-name">${u.name}</div><div class="plan-dur">${mins}分/日</div></div><input type="number" value="${mins}" min="0" max="120" step="5" style="width:60px;padding:8px;border-radius:8px;border:1px solid var(--surface2);background:var(--bg);color:var(--text);font-size:14px;text-align:center" onchange="updatePlan('${u.id}',this.value)"></div>`;}).join('');document.getElementById('planTotal').textContent=plan.reduce((s,p)=>s+p.mins,0);document.getElementById('dailyGoalInput').value=goals.daily;document.getElementById('weeklyMinInput').value=goals.weeklyMin;}
+function renderPlan(){document.getElementById('planList').innerHTML=UNITS.map(u=>{const p=plan.find(x=>x.id===u.id);const mins=p?p.mins:30;return `<div class="plan-item"><div class="plan-icon" style="background:${u.color}20">${u.icon}</div><div class="plan-content"><div class="plan-name">${u.name}</div><div class="plan-dur">${mins}分/日</div></div><input type="number" value="${mins}" min="0" max="120" step="5" style="width:60px;padding:8px;border-radius:8px;border:1px solid var(--surface2);background:var(--bg);color:var(--text);font-size:14px;text-align:center" onchange="updatePlan('${u.id}',this.value)"></div>`;}).join('');document.getElementById('planTotal').textContent=plan.reduce((s,p)=>s+p.mins,0);document.getElementById('dailyGoalInput').value=goals.daily;document.getElementById('weeklyMinInput').value=goals.weeklyMin;document.getElementById('scoreDate').value=today();renderScores();}
 function updatePlan(id,val){const p=plan.find(x=>x.id===id);if(p)p.mins=parseInt(val)||0;save('plan',plan);renderPlan();}
 function saveGoals(){goals.daily=parseInt(document.getElementById('dailyGoalInput').value)||150;goals.weeklyMin=parseInt(document.getElementById('weeklyMinInput').value)||840;save('goals',goals);renderHome();showToast('目標を保存しました');}
+
+// ===== VERSANT SCORES =====
+function latestScore(){return scores.length?[...scores].sort((a,b)=>a.date<b.date?1:-1)[0]:null;}
+function renderScores(){const el=document.getElementById('scoreList');if(scores.length===0){el.innerHTML='<p style="font-size:13px;color:var(--text2);margin-bottom:8px">記録なし</p>';return;}el.innerHTML=[...scores].sort((a,b)=>a.date<b.date?1:-1).map(s=>`<div class="log-item"><div class="log-info"><div class="log-time">${s.date}</div></div><div class="log-mins">${s.score}点</div><button class="log-edit" onclick="deleteScore(${s.id})">削除</button></div>`).join('');}
+function addScore(){const d=document.getElementById('scoreDate').value;const v=parseInt(document.getElementById('scoreVal').value);if(!d||!v){showToast('受験日とスコアを入力してください','warn');return;}scores.push({id:nextLogId++,date:d,score:v});save('scores',scores);save('nextLogId',nextLogId);document.getElementById('scoreVal').value='';renderScores();showToast('スコアを記録しました');}
+function deleteScore(id){scores=scores.filter(s=>s.id!==id);save('scores',scores);renderScores();showToast('削除しました');}
+
+// ===== DATA EXPORT / IMPORT =====
+function exportData(){const t=JSON.stringify({app:'english-daily',exported:new Date().toISOString(),logs,plan,goals,scores,nextLogId});navigator.clipboard.writeText(t).then(()=>showToast('データをコピーしました。メモ等に保存してください')).catch(()=>{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast('データをコピーしました。メモ等に保存してください');});}
+function importData(){const t=document.getElementById('importText').value.trim();if(!t){showToast('復元するデータを貼り付けてください','warn');return;}let d;try{d=JSON.parse(t)}catch{showToast('データの形式が正しくありません','warn');return;}if(!d||typeof d.logs!=='object'||d.logs===null||Array.isArray(d.logs)){showToast('English Dailyのデータではありません','warn');return;}if(!confirm('現在のデータを貼り付けた内容で上書きします。よろしいですか？'))return;logs=d.logs;plan=Array.isArray(d.plan)&&d.plan.length?d.plan:DEFAULT_PLAN;goals=d.goals&&d.goals.daily?d.goals:{daily:150,weeklyMin:840};scores=Array.isArray(d.scores)?d.scores:[];nextLogId=parseInt(d.nextLogId)||1;save('logs',logs);save('plan',plan);save('goals',goals);save('scores',scores);save('nextLogId',nextLogId);document.getElementById('importText').value='';renderHome();renderRecord();renderPlan();renderHistory();showToast('データを復元しました');}
 
 // ===== WEEKLY REPORT =====
 function getWeeklyReportData(){
@@ -254,14 +277,14 @@ function getWeeklyReportData(){
   const totalDays=Math.max(1,Math.floor((todayD-startD)/(86400000)));
   const totalWeeks=Math.max(1,Math.ceil(totalDays/7));
   let totalAllMins=0;
-  for(let d=new Date(startD);d<=todayD;d.setDate(d.getDate()+1)){totalAllMins+=getDayMins(d.toISOString().slice(0,10));}
+  for(let d=new Date(startD);d<=todayD;d.setDate(d.getDate()+1)){totalAllMins+=getDayMins(iso(d));}
   const avgDaily=Math.round(totalAllMins/totalDays);
   const avgWeekly=Math.round(totalAllMins/totalWeeks);
   // Next milestone
   const nextMs=MILESTONES.find(m=>m.date>today())||MILESTONES[MILESTONES.length-1];
   const daysToMs=Math.max(0,Math.floor((new Date(nextMs.date+'T00:00:00')-todayD)/86400000));
   const weeksToMs=Math.ceil(daysToMs/7);
-  return{dates,weekTotal,unitData,totalDays,totalAllMins,avgDaily,avgWeekly,nextMs,daysToMs,weeksToMs,streak:streak.count};
+  return{dates,weekTotal,unitData,totalDays,totalAllMins,avgDaily,avgWeekly,nextMs,daysToMs,weeksToMs,streak:calcStreak()};
 }
 
 function renderReport(){
@@ -296,6 +319,8 @@ function renderReport(){
   html+=`日平均: ${r.avgDaily}分 / 週平均: ${r.avgWeekly}分<br><br>`;
   html+=`<b>次のマイルストーン: ${r.nextMs.label}</b><br>`;
   html+=`目標: Versant ${r.nextMs.target}点<br>`;
+  const ls=latestScore();
+  html+=`直近スコア: ${ls?`${ls.score}点 (${ls.date})`:'未受験'}<br>`;
   html+=`残り: ${r.daysToMs}日 (${r.weeksToMs}週間)<br>`;
   const onTrack=r.avgWeekly>=goals.weeklyMin;
   html+=onTrack?`<span style="color:var(--green)">✅ 現在のペースは計画通りです</span>`:`<span style="color:var(--orange)">⚠️ 週平均${r.avgWeekly}分は目標${goals.weeklyMin}分を下回っています。1日あたり${Math.ceil((goals.weeklyMin-r.avgWeekly)/7)}分の上積みが必要です</span>`;
@@ -312,7 +337,7 @@ function getAllWeeks(){
     const weekEnd=new Date(weekStart);weekEnd.setDate(weekEnd.getDate()+6);
     if(weekEnd>todayD)weekEnd.setTime(todayD.getTime());
     const dates=[];
-    for(let d=new Date(weekStart);d<=weekEnd;d.setDate(d.getDate()+1)){dates.push(d.toISOString().slice(0,10));}
+    for(let d=new Date(weekStart);d<=weekEnd;d.setDate(d.getDate()+1)){dates.push(iso(d));}
     const total=dates.reduce((s,d)=>s+getDayMins(d),0);
     const unitTotals={};
     UNITS.forEach(u=>{unitTotals[u.id]=dates.reduce((s,d)=>s+getDayUnitMins(d,u.id),0);});
@@ -328,7 +353,7 @@ function getMonthlyData(){
   const todayD=new Date(today()+'T00:00:00');
   const months={};
   for(let d=new Date(startD);d<=todayD;d.setDate(d.getDate()+1)){
-    const ds=d.toISOString().slice(0,10);
+    const ds=iso(d);
     const mKey=`${d.getFullYear()}年${d.getMonth()+1}月`;
     if(!months[mKey]){months[mKey]={total:0,units:{},days:0,activeDays:0};UNITS.forEach(u=>months[mKey].units[u.id]=0);}
     const dayTotal=getDayMins(ds);
@@ -391,6 +416,8 @@ function generateReportText(){
   t+=`  学習${r.totalDays}日目 / 累計${r.totalAllMins}分(${Math.round(r.totalAllMins/60)}時間)\n`;
   t+=`  日平均${r.avgDaily}分 / 週平均${r.avgWeekly}分\n`;
   t+=`  次のマイルストーン: ${r.nextMs.label} (Versant${r.nextMs.target}点, 残り${r.daysToMs}日)\n`;
+  const ls=latestScore();
+  t+=`  直近Versantスコア: ${ls?`${ls.score}点 (${ls.date})`:'未受験'}\n`;
   const onTrack=r.avgWeekly>=goals.weeklyMin;
   t+=onTrack?`  → 計画通りのペースです\n`:`  → 週${goals.weeklyMin-r.avgWeekly}分不足。1日+${Math.ceil((goals.weeklyMin-r.avgWeekly)/7)}分が必要\n`;
   return t;
@@ -406,14 +433,14 @@ function copyReport(){
 
 // History
 function histNav(dir){histDate.setDate(histDate.getDate()+dir);renderHistory();}
-function renderHistory(){const ds=histDate.toISOString().slice(0,10);document.getElementById('histDateLabel').textContent=`${histDate.getMonth()+1}月${histDate.getDate()}日（${dayLabel(ds)}）`;const dl=logs[ds]||[];const totalMins=dl.reduce((s,l)=>s+l.mins,0);let html=`<div style="text-align:center;margin-bottom:12px"><span style="font-size:24px;font-weight:700">${totalMins}</span><span style="font-size:14px;color:var(--text2)"> / ${goals.daily}分</span></div>`;html+=UNITS.map(u=>{const actual=dl.filter(l=>l.unit===u.id).reduce((s,l)=>s+l.mins,0);const planned=plan.find(p=>p.id===u.id)?.mins||30;const p=Math.min(100,Math.round(actual/planned*100));return `<div class="unit-bar-wrap"><div class="unit-bar-header"><span class="unit-bar-name">${u.icon} ${u.name}</span><span class="unit-bar-time">${actual}/${planned}分</span></div><div class="unit-bar"><div class="unit-bar-fill" style="width:${p}%;background:${u.color}"></div></div></div>`;}).join('');if(dl.length>0){html+='<div style="margin-top:12px">';dl.forEach(l=>{const u=UNITS.find(x=>x.id===l.unit);html+=`<div class="log-item"><span class="log-cat" style="background:${u?u.color:'#666'}20;color:${u?u.color:'#666'}">${u?u.icon+' '+u.name:l.unit}</span><div class="log-info"><div class="log-time">${l.time||''}</div></div><div class="log-mins">${l.mins}分</div><button class="log-edit" onclick="openEdit('${ds}',${l.id})">編集</button></div>`;});html+='</div>';}html+=`<button class="submit-btn" style="margin-top:12px;background:var(--surface2)" onclick="addManualForDate('${ds}')">＋ この日に記録を追加</button>`;document.getElementById('histDayDetail').innerHTML=html;renderYearCal();}
-function addManualForDate(date){document.getElementById('manDate').value=date;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.tab-btn')[1].classList.add('active');document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.getElementById('page-record').classList.add('active');switchRecTab('manual');}
-function renderYearCal(){const start=new Date(START_DATE+'T00:00:00');const end=new Date(start);end.setFullYear(end.getFullYear()+1);const todayStr=today();let html='';let curMonth=-1;for(let d=new Date(start);d<end;d.setDate(d.getDate()+1)){const m=d.getMonth();if(m!==curMonth){if(curMonth!==-1)html+='</div>';curMonth=m;html+=`<div class="year-month-label">${m+1}月</div><div class="year-grid">`;if(d.getDate()===1){const dow=d.getDay();for(let i=0;i<dow;i++)html+='<div class="year-day empty"></div>';}}const ds=d.toISOString().slice(0,10);const mins=getDayMins(ds);let cls='year-day';if(ds===todayStr)cls+=' today';if(ds>todayStr)cls+=' future';else if(mins>0){const ratio=mins/goals.daily;if(ratio>=1)cls+=' lv5';else if(ratio>=0.8)cls+=' lv4';else if(ratio>=0.6)cls+=' lv3';else if(ratio>=0.3)cls+=' lv2';else cls+=' lv1';}html+=`<div class="${cls}" onclick="jumpToDate('${ds}')"></div>`;}html+='</div>';document.getElementById('yearCal').innerHTML=html;}
+function renderHistory(){const ds=iso(histDate);document.getElementById('histDateLabel').textContent=`${histDate.getMonth()+1}月${histDate.getDate()}日（${dayLabel(ds)}）`;const dl=logs[ds]||[];const totalMins=dl.reduce((s,l)=>s+l.mins,0);let html=`<div style="text-align:center;margin-bottom:12px"><span style="font-size:24px;font-weight:700">${totalMins}</span><span style="font-size:14px;color:var(--text2)"> / ${goals.daily}分</span></div>`;html+=UNITS.map(u=>{const actual=dl.filter(l=>l.unit===u.id).reduce((s,l)=>s+l.mins,0);const planned=plan.find(p=>p.id===u.id)?.mins||30;const p=Math.min(100,Math.round(actual/planned*100));return `<div class="unit-bar-wrap"><div class="unit-bar-header"><span class="unit-bar-name">${u.icon} ${u.name}</span><span class="unit-bar-time">${actual}/${planned}分</span></div><div class="unit-bar"><div class="unit-bar-fill" style="width:${p}%;background:${u.color}"></div></div></div>`;}).join('');if(dl.length>0){html+='<div style="margin-top:12px">';dl.forEach(l=>{const u=UNITS.find(x=>x.id===l.unit);html+=`<div class="log-item"><span class="log-cat" style="background:${u?u.color:'#666'}20;color:${u?u.color:'#666'}">${u?u.icon+' '+u.name:l.unit}</span><div class="log-info"><div class="log-time">${l.time||''}</div></div><div class="log-mins">${l.mins}分</div><button class="log-edit" onclick="openEdit('${ds}',${l.id})">編集</button></div>`;});html+='</div>';}html+=`<button class="submit-btn" style="margin-top:12px;background:var(--surface2)" onclick="addManualForDate('${ds}')">＋ この日に記録を追加</button>`;document.getElementById('histDayDetail').innerHTML=html;renderYearCal();}
+function addManualForDate(date){bulkDate=date>today()?today():date;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.querySelectorAll('.tab-btn')[1].classList.add('active');document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.getElementById('page-record').classList.add('active');switchRecTab('manual');renderBulk();}
+function renderYearCal(){const start=new Date(START_DATE+'T00:00:00');const end=new Date(start);end.setFullYear(end.getFullYear()+1);const todayStr=today();let html='';let curMonth=-1;for(let d=new Date(start);d<end;d.setDate(d.getDate()+1)){const m=d.getMonth();if(m!==curMonth){if(curMonth!==-1)html+='</div>';curMonth=m;html+=`<div class="year-month-label">${m+1}月</div><div class="year-grid">`;if(d.getDate()===1){const dow=d.getDay();for(let i=0;i<dow;i++)html+='<div class="year-day empty"></div>';}}const ds=iso(d);const mins=getDayMins(ds);let cls='year-day';if(ds===todayStr)cls+=' today';if(ds>todayStr)cls+=' future';else if(mins>0){const ratio=mins/goals.daily;if(ratio>=1)cls+=' lv5';else if(ratio>=0.8)cls+=' lv4';else if(ratio>=0.6)cls+=' lv3';else if(ratio>=0.3)cls+=' lv2';else cls+=' lv1';}html+=`<div class="${cls}" onclick="jumpToDate('${ds}')"></div>`;}html+='</div>';document.getElementById('yearCal').innerHTML=html;}
 function jumpToDate(ds){histDate=new Date(ds+'T00:00:00');renderHistory();window.scrollTo(0,0);}
 
 function showToast(msg,type){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show'+(type==='warn'?' warn':'');setTimeout(()=>t.className='toast',2500);}
 
-function init(){if(streak.lastDate&&streak.lastDate!==today()){const yd=new Date();yd.setDate(yd.getDate()-1);if(streak.lastDate!==yd.toISOString().slice(0,10)){streak.count=0;save('streak',streak);}}renderHome();renderRecord();renderPlan();histDate=new Date();renderHistory();}
+function init(){renderHome();renderRecord();renderPlan();histDate=new Date();renderHistory();}
 init();
 </script>
 </body>
